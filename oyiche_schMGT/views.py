@@ -7,6 +7,7 @@ from django.views import View
 import pandas as pd
 from urllib.parse import urlencode
 from django.contrib.messages.views import SuccessMessageMixin
+from django.db import IntegrityError
 
 # My App imports
 from oyiche_schMGT.models import *
@@ -16,6 +17,7 @@ from oyiche_files.models import *
 from oyiche_schMGT.utils import *
 
 # Create your views here.
+
 
 def get_school(request):
     school = None
@@ -44,6 +46,7 @@ class StudentPageView(LoginRequiredMixin, View):
     user_form = UserForm
     info_form = StudentInformationForm
     enrollment_form = StudentEnrollmentForm
+    school = None
 
     # Context variables
     object_list = None
@@ -51,7 +54,7 @@ class StudentPageView(LoginRequiredMixin, View):
     add_student = ''
 
     def get(self, request):
-        school = get_school(request)
+        self.school = get_school(request)
 
         self.all_student = 'active'
         self.add_student = ''
@@ -72,7 +75,7 @@ class StudentPageView(LoginRequiredMixin, View):
             initial_data['student_class'] = student_class
 
         if academic_session and academic_session != 'None':
-            query["school_academic_information__academic_session"] = academic_session,
+            query["academic_session"] = academic_session,
             initial_data['academic_session'] = academic_session
 
         if academic_status and academic_status != 'None':
@@ -81,13 +84,18 @@ class StudentPageView(LoginRequiredMixin, View):
 
         if query:
             self.object_list = StudentEnrollment.objects.filter(**query)
-            self.form = self.form(initial=initial_data)
+            self.form = self.form(initial=initial_data, school=self.school)
+        else:
+            self.form = self.form(school=self.school)
 
-        return render(request=request, template_name=self.template_name, context={'form': self.form, 'user_form': self.user_form, 'info_form': self.info_form, 'enrollment_form': self.enrollment_form, 'object_list': self.object_list, 'all_student': self.all_student, 'add_student': self.add_student})
+
+        return render(request=request, template_name=self.template_name, context={'form': self.form, 'user_form': self.user_form, 'info_form': self.info_form, 'enrollment_form': self.enrollment_form(school=self.school), 'object_list': self.object_list, 'all_student': self.all_student, 'add_student': self.add_student})
 
     def post(self, request):
-        school = get_school(request)
-        form = self.form(data=request.POST)
+
+        self.school = get_school(request)
+
+        form = self.form(data=request.POST, school=self.school)
 
         def get_students(self, add_student, all_student):
 
@@ -98,9 +106,10 @@ class StudentPageView(LoginRequiredMixin, View):
                 student_class = form.cleaned_data.get('student_class')
                 academic_session = form.cleaned_data.get('academic_session')
                 academic_status = form.cleaned_data.get('academic_status')
+
             except AttributeError:
-                pass
-                student_class = StudentClass.objects.get(
+
+                student_class = SchoolClasses.objects.get(
                     pk=request.POST.get('student_class'))
                 academic_session = AcademicSession.objects.get(
                     pk=request.POST.get('academic_session'))
@@ -111,7 +120,7 @@ class StudentPageView(LoginRequiredMixin, View):
 
             query = {
                 'student_class': student_class,
-                'school_academic_information__academic_session': academic_session,
+                'academic_session': academic_session,
             }
 
             if academic_status is not None:
@@ -147,13 +156,14 @@ class StudentPageView(LoginRequiredMixin, View):
 
         elif 'create' in request.POST:
             user_form = self.user_form(
-                data=request.POST, files=request.FILES, school=school)
+                data=request.POST, files=request.FILES, school=self.school)
             info_form = self.info_form(data=request.POST)
-            enrollment_form = self.enrollment_form(data=request.POST)
+            enrollment_form = self.enrollment_form(data=request.POST, school=self.school)
 
+            # Get session, status & term
             academic_status = AcademicStatus.objects.get(status="active")
-            school_academic_info = SchoolAcademicInformation.objects.get(
-                school=school)
+            session = self.school.school_academic_session.filter(is_current=True).first()
+            term = self.school.school_academic_term.filter(is_current=True).first()
 
             if user_form.is_valid() and info_form.is_valid() and enrollment_form.is_valid():
 
@@ -165,12 +175,13 @@ class StudentPageView(LoginRequiredMixin, View):
                     user_title="student")
                 user_form_data.save()
 
-                info_form_data.school = school
+                info_form_data.school = self.school
                 info_form_data.user = user_form_data
                 info_form_data.save()
 
                 enrollment_form_data.student = info_form_data
-                enrollment_form_data.school_academic_information = school_academic_info
+                enrollment_form_data.academic_session = session
+                enrollment_form_data.academic_term = term
                 enrollment_form_data.academic_status = academic_status
                 enrollment_form_data.save()
 
@@ -192,7 +203,8 @@ class StudentPageView(LoginRequiredMixin, View):
             get_students(self, '', 'active')
             messages.error(request=request,
                            message="couldn't handle request, Try again!!")
-        return render(request=request, template_name=self.template_name, context={'form': self.form, 'user_form': self.user_form, 'info_form': self.info_form, 'enrollment_form': self.enrollment_form, 'object_list': self.object_list, 'all_student': self.all_student, 'add_student': self.add_student})
+
+        return render(request=request, template_name=self.template_name, context={'form': self.form, 'user_form': self.user_form, 'info_form': self.info_form, 'enrollment_form': self.enrollment_form(school=self.school), 'object_list': self.object_list, 'all_student': self.all_student, 'add_student': self.add_student})
 
 
 class EditStudentPageView(LoginRequiredMixin, View):
@@ -203,6 +215,9 @@ class EditStudentPageView(LoginRequiredMixin, View):
     enrollment_form = StudentEnrollmentForm
 
     def get(self, request, user_id):
+
+        school = get_school(request)
+
         query_params = {
             'student_class': request.GET.get("student_class"),
             'academic_session': request.GET.get("academic_session"),
@@ -220,7 +235,7 @@ class EditStudentPageView(LoginRequiredMixin, View):
             context = {
                 'user_form': self.user_form(instance=user),
                 'info_form': self.info_form(instance=student_info),
-                'enrollment_form': self.enrollment_form(instance=student_enrollment),
+                'enrollment_form': self.enrollment_form(instance=student_enrollment, school=school),
                 'student_class': query_params['student_class'],
                 'academic_session': query_params['academic_session'],
                 'academic_status': query_params['academic_status']
@@ -242,6 +257,8 @@ class EditStudentPageView(LoginRequiredMixin, View):
 
     def post(self, request, user_id):
 
+        school = get_school(request)
+
         user = User.objects.get(user_id=user_id)
         student_info = StudentInformation.objects.get(user=user)
         student_enrollment = StudentEnrollment.objects.get(
@@ -251,7 +268,7 @@ class EditStudentPageView(LoginRequiredMixin, View):
             instance=user, data=request.POST, files=request.FILES)
         info_form = self.info_form(instance=student_info, data=request.POST)
         enrollment_form = self.enrollment_form(
-            instance=student_enrollment, data=request.POST)
+            instance=student_enrollment, data=request.POST, school=school)
 
         query_params = {
             'student_class': request.POST.get("student_class"),
@@ -287,12 +304,14 @@ class EditStudentPageView(LoginRequiredMixin, View):
 
 
 class SchoolFileUploadView(LoginRequiredMixin, ListView):
+
+    school = None
     template_name = "backend/school/file_manager.html"
 
     def get_queryset(self):
-        school = get_school(self.request)
-        if school:
-            return FilesManager.objects.filter(school=school).order_by('-date_created')
+        self.school = get_school(self.request)
+        if self.school:
+            return FilesManager.objects.filter(school=self.school).order_by('-date_created')
         return FilesManager.objects.none()
 
     def get(self, request, *args, **kwargs):
@@ -301,7 +320,7 @@ class SchoolFileUploadView(LoginRequiredMixin, ListView):
 
     def get_context_data(self, **kwargs):
         context = super(SchoolFileUploadView, self).get_context_data(**kwargs)
-        form = FilesManagerForm()
+        form = FilesManagerForm(school=self.school)
 
         # Files Templates for download
         context['with_studentID'] = get_object_or_404(
@@ -315,9 +334,10 @@ class SchoolFileUploadView(LoginRequiredMixin, ListView):
         return context
 
     def post(self, request, *args, **kwargs):
-        form = FilesManagerForm(data=self.request.POST,
-                                files=self.request.FILES)
+
         self.object_list = self.get_queryset()
+        form = FilesManagerForm(data=self.request.POST,
+                                files=self.request.FILES, school=self.school)
 
         if form.is_valid():
             data = form.save(commit=False)
@@ -370,3 +390,116 @@ class DeleteFileView(LoginRequiredMixin, View):
             messages.error(self.request, "File Not Found!!")
         finally:
             return redirect('sch:file_manager')
+
+
+class UploadReportView(LoginRequiredMixin, View):
+    template_name = "backend/student/upload_report.html"
+
+    form = UploadReportForm
+
+    # Context variables
+    upload_report = ''
+    view_report = ''
+
+    def get(self, request):
+        school = get_school(request)
+
+        self.upload_report = 'active'
+        self.view_report = ''
+
+        return render(request=request, template_name=self.template_name, context={'form': self.form, 'upload_report': self.upload_report, 'view_report': self.view_report})
+
+
+class SchoolClassesView(LoginRequiredMixin, ListView):
+
+    model = SchoolClasses
+    template_name = "backend/classes/school_classes.html"
+    form = SchoolClassesForm
+
+    def get_queryset(self):
+        school = get_school(self.request)
+        if school:
+            return SchoolClasses.objects.filter(school_info=school).order_by('-date_created')
+        return SchoolClasses.objects.none()
+
+    def get_context_data(self, **kwargs):
+        school = get_school(self.request)
+
+        context = super(SchoolClassesView, self).get_context_data(**kwargs)
+
+        context['form'] = self.form(school=school)
+
+        return context
+
+    def post(self, request, *args, **kwargs):
+
+        school = get_school(request=request) #Get school info
+
+        if 'create' in request.POST:
+
+            form = self.form(request.POST, school=school)
+            self.object_list = self.get_queryset()
+
+            if form.is_valid():
+                data = form.save(commit=False)
+                data.school_info = school
+
+                class_name = form.cleaned_data.get('class_name')
+
+                data.save()
+                messages.success(request, f"{class_name} successfully created")
+                return redirect("sch:school_classes")
+
+            else:
+                # If form is invalid, re-render the page with errors
+                context = self.get_context_data()
+                context['form'] = form
+                messages.error(request, form.errors.as_text())
+                return self.render_to_response(context)
+
+        elif 'delete' in request.POST:
+
+            class_id = request.POST.get('class_id')
+
+            try:
+                SchoolClasses.objects.get(school_info=school, pk=class_id).delete()
+                messages.success(
+                    request, "Class has been deleted successfully!!")
+            except SchoolClasses.DoesNotExist:
+                messages.error(request, "Failed to delete class!!")
+
+            return redirect('sch:school_classes')
+
+        elif 'edit' in request.POST:
+
+            class_id = request.POST.get('class_id')
+            class_name = request.POST.get('class_name')
+
+
+            try:
+                school_class = SchoolClasses.objects.get(school_info=school, pk=class_id)
+                school_class.class_name = class_name
+                school_class.save()
+
+                messages.success(
+                    request, "Class has been updated successfully!!")
+            except SchoolClasses.DoesNotExist:
+                messages.error(request, "Failed to update class!!")
+            except IntegrityError:
+                messages.error(
+                    request, f"Failed to update class: Class name '{class_name}' already exists!"
+                )
+
+            except Exception as e:
+                messages.error(request, f"An unexpected error occurred: {str(e)}")
+
+            return redirect('sch:school_classes')
+
+        else:
+            messages.error(request=request,
+                           message="couldn't handle request, Try again!!")
+            return redirect('sch:school_classes')
+
+
+
+
