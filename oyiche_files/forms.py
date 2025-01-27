@@ -65,7 +65,7 @@ class FilesManagerForm(forms.ModelForm):
         if self.school:
             self.fields['class_name'].queryset = SchoolClasses.objects.filter(
                 school_info=self.school)
-            self.fields['class_name'].label_from_instance = lambda obj: obj.class_name
+            self.fields['class_name'].label_from_instance = lambda obj: obj.class_name.upper()
         else:
             self.fields['class_name'].queryset = SchoolClasses.objects.none()
 
@@ -95,10 +95,6 @@ class FilesManagerForm(forms.ModelForm):
         uploaded_file = cleaned_data.get('file')
         file_type = cleaned_data.get('file_type')
         class_name = cleaned_data.get('class_name')
-
-        # * class_name * Select a valid choice. That choice is not one of the available choices. * __all__ * File Type 'Registration' requires student class.
-
-        print(f"CLASSNAME: {class_name}")
 
         if str(file_type) == 'Registration' and not class_name:
             raise forms.ValidationError(
